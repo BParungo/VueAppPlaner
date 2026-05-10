@@ -15,12 +15,15 @@ import { MiniMap } from '@vue-flow/minimap';
 import { Button } from '@/components/ui/button';
 import NodePalette from '@/components/NodePalette.vue';
 import PropertiesPanel from '@/components/PropertiesPanel.vue';
+import LiveCursors from '@/components/LiveCursors.vue';
+import ActiveUsers from '@/components/ActiveUsers.vue';
 import { nodeTypes } from '@/nodes';
 import { NODE_DEFAULTS, type NodeKind } from '@/schemas/nodes';
 import { getBoard, type Board } from '@/lib/supabase/boards';
 import { useRecentBoards } from '@/composables/useRecentBoards';
 import { useLocalUser } from '@/composables/useLocalUser';
 import { useYBoard } from '@/composables/useYBoard';
+import { useAwareness } from '@/composables/useAwareness';
 import { provideBoardContext } from '@/composables/boardContext';
 import {
   addNode,
@@ -47,12 +50,16 @@ const {
   ready: yReady,
   error: yError,
   snapshotState,
+  connectionStatus,
+  awareness,
   flush,
   getBoard: getYBoard,
   getUndoManager,
 } = yboard;
 
 provideBoardContext({ nodes, edges });
+
+const { peers, setCursor, setSelection } = useAwareness(awareness);
 
 function styleFor(reportTotalMismatch: boolean, partialMismatch: boolean) {
   if (reportTotalMismatch) {
@@ -138,6 +145,7 @@ onNodesChange((changes: NodeChange[]) => {
     if (change.type === 'select') {
       if (change.selected) selectedNodeId.value = change.id;
       else if (selectedNodeId.value === change.id) selectedNodeId.value = null;
+      setSelection(selectedNodeId.value);
     }
   }
   if (suppressFlowChanges > 0) return;
@@ -173,6 +181,15 @@ function uuid(): string {
 function onDragOver(event: DragEvent) {
   event.preventDefault();
   if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+}
+
+function onCanvasMouseMove(event: MouseEvent) {
+  const flow = screenToFlowCoordinate({ x: event.clientX, y: event.clientY });
+  setCursor({ x: flow.x, y: flow.y });
+}
+
+function onCanvasMouseLeave() {
+  setCursor(null);
 }
 
 function onDrop(event: DragEvent) {
@@ -253,6 +270,36 @@ const snapshotDot = computed(() => {
   }
 });
 
+const connectionLabel = computed(() => {
+  switch (connectionStatus.value) {
+    case 'connecting':
+      return 'Verbinde …';
+    case 'connected':
+      return 'Live';
+    case 'disconnected':
+      return 'Offline';
+    case 'error':
+      return 'Verbindungsfehler';
+    default:
+      return '';
+  }
+});
+
+const connectionDot = computed(() => {
+  switch (connectionStatus.value) {
+    case 'connected':
+      return 'bg-emerald-500';
+    case 'connecting':
+      return 'bg-amber-500 animate-pulse';
+    case 'disconnected':
+      return 'bg-muted-foreground';
+    case 'error':
+      return 'bg-destructive';
+    default:
+      return 'bg-muted-foreground';
+  }
+});
+
 onMounted(async () => {
   loading.value = true;
   try {
@@ -300,11 +347,25 @@ watch(yError, (err) => {
           <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
             <span
               class="inline-block h-2 w-2 rounded-full"
+              :class="connectionDot"
+              aria-hidden="true"
+            />
+            {{ connectionLabel }}
+          </div>
+
+          <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span
+              class="inline-block h-2 w-2 rounded-full"
               :class="snapshotDot"
               aria-hidden="true"
             />
             {{ snapshotLabel }}
           </div>
+
+          <ActiveUsers
+            :peers="peers"
+            :self="{ displayName: user.displayName, color: user.color }"
+          />
 
           <Button variant="ghost" size="sm" @click="onUndo">↶ Undo</Button>
           <Button variant="ghost" size="sm" @click="onRedo">↷ Redo</Button>
@@ -349,6 +410,8 @@ watch(yError, (err) => {
         class="flex-1 relative"
         @dragover="onDragOver"
         @drop="onDrop"
+        @mousemove="onCanvasMouseMove"
+        @mouseleave="onCanvasMouseLeave"
       >
         <VueFlow
           :nodes="nodes"
@@ -361,6 +424,7 @@ watch(yError, (err) => {
           <MiniMap pannable zoomable />
           <Controls />
         </VueFlow>
+        <LiveCursors :peers="peers" />
       </div>
       <PropertiesPanel
         v-if="showProperties"

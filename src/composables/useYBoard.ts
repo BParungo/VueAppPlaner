@@ -1,5 +1,13 @@
-import { onBeforeUnmount, onMounted, ref, shallowRef } from 'vue';
+import {
+  effectScope,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  shallowRef,
+  watch,
+} from 'vue';
 import * as Y from 'yjs';
+import type { Awareness } from 'y-protocols/awareness';
 import {
   createBoardDoc,
   destroyBoardDoc,
@@ -19,17 +27,9 @@ import {
   ORIGIN_LOCAL,
   bindFlowToYDoc,
 } from '@/lib/yjs/flow-sync';
-
-export interface UseYBoardResult {
-  board: BoardDoc | null;
-  nodes: ReturnType<typeof shallowRef<FlowNodeShape[]>>;
-  edges: ReturnType<typeof shallowRef<FlowEdgeShape[]>>;
-  ready: ReturnType<typeof ref<boolean>>;
-  error: ReturnType<typeof ref<Error | null>>;
-  snapshotState: ReturnType<typeof ref<SnapshotState>>;
-  undoManager: Y.UndoManager | null;
-  flush: () => Promise<void>;
-}
+import { createSupabaseProvider } from '@/lib/yjs/supabase-provider';
+import type { ProviderStatus, YProvider } from '@/lib/yjs/provider';
+import { useLocalUser } from './useLocalUser';
 
 export function useYBoard(boardId: string) {
   const nodes = shallowRef<FlowNodeShape[]>([]);
@@ -37,12 +37,18 @@ export function useYBoard(boardId: string) {
   const ready = ref(false);
   const error = ref<Error | null>(null);
   const snapshotState = ref<SnapshotState>('idle');
+  const connectionStatus = ref<ProviderStatus>('connecting');
+  const awareness = shallowRef<Awareness | null>(null);
+
+  const { user } = useLocalUser();
 
   let board: BoardDoc | null = null;
   let undoManager: Y.UndoManager | null = null;
   let snapshotLoop: SnapshotLoop | null = null;
   let unbindFlow: (() => void) | null = null;
   let unsubBeforeUnload: (() => void) | null = null;
+  let provider: YProvider | null = null;
+  const scope = effectScope();
 
   onMounted(async () => {
     try {
@@ -74,6 +80,20 @@ export function useYBoard(boardId: string) {
         snapshotState.value = s;
       });
 
+      provider = createSupabaseProvider(boardId, board, user.value);
+      awareness.value = provider.awareness;
+      const p = provider;
+      scope.run(() => {
+        watch(
+          p.status,
+          (s) => {
+            connectionStatus.value = s;
+          },
+          { immediate: true },
+        );
+      });
+      void provider.connect();
+
       const onBeforeUnload = () => {
         snapshotLoop?.flush().catch(() => undefined);
       };
@@ -91,6 +111,9 @@ export function useYBoard(boardId: string) {
     snapshotLoop?.flush().catch(() => undefined);
     snapshotLoop?.stop();
     unsubBeforeUnload?.();
+    scope.stop();
+    provider?.destroy();
+    provider = null;
     unbindFlow?.();
     undoManager?.destroy();
     if (board) destroyBoardDoc(board);
@@ -103,8 +126,11 @@ export function useYBoard(boardId: string) {
     ready,
     error,
     snapshotState,
+    connectionStatus,
+    awareness,
     getBoard: () => board,
     getUndoManager: () => undoManager,
+    getProvider: () => provider,
     flush: async () => {
       await snapshotLoop?.flush();
     },
