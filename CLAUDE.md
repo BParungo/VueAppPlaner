@@ -4,9 +4,9 @@ Visuelles Planungs-Tool für Vue-Apps. Multi-User, kein Login in V1. Volle Spec:
 
 ## Aktueller Stand (2026-05-10)
 
-**Phase 0 + Phase 1 abgeschlossen.** Build sauber, Dev-Server läuft, Supabase Cloud verbunden, Migrations gelaufen. Im Browser getestet: Board-Erstellung, Drag&Drop von Nodes, Edge-Verbindungen, Recent-Boards-Liste funktionieren. Nodes/Edges sind aktuell nur in `shallowRef` — Reload löscht den Canvas (erwartbar, Persistenz kommt in Phase 2).
+**Phase 0 + 1 + 2 abgeschlossen.** Browser-getestet: Reload-Persistenz, Properties-Panel mit zod-Forms, Undo/Redo via Y.UndoManager, Save-Status-Indikator im Header. Zusätzlich: Felder sind jetzt typisiert (`{ name, type }`), Match-Engine markiert props mit ✓/⚠/✗, Edges werden bei Total-Mismatch rot, ungenutzte Source-Felder mit 💤. Alles in einem Commit (`beb9694`).
 
-**Nächster Schritt:** Phase 2 — Y.js + IndexedDB + Storage-Snapshots.
+**Nächster Schritt:** Phase 3 — Realtime-Kollaboration (Custom Y.js-Provider auf Supabase Broadcast, Awareness, Live-Cursor).
 
 ## Stack
 
@@ -98,6 +98,17 @@ supabase/
 - **Supabase Free pausiert nach 7d** → Vercel Cron als Anti-Pause-Ping (Phase 5).
 - **Phase 3 ist die größte Unbekannte** — Y.js × Supabase Realtime ist nicht out-of-the-box. Plan B: eigener `y-websocket`-Server (Bun.serve, Fly/Railway).
 
+## Erkenntnisse aus Phase 2
+
+- **Vue Flow's `:edges`/`:nodes`-Props sind nur Initial-Werte.** Updates an `style`/`markerEnd` werden NICHT durchgereicht, auch wenn der Computed-Output korrekt ist. Lösung: explizit `useVueFlow().setEdges(next)` / `setNodes(next)` in einem deep-watcher schreiben — siehe [src/views/BoardView.vue](src/views/BoardView.vue). Klassischer Stolperstein.
+- **`markRaw` auf node-type-Registry ist Pflicht.** Sobald die Pipeline durch tieferes Reactivity-Wrapping geht (Y.Doc-Daten → shallowRef → Vue Flow), warnt Vue „received a Component that was made a reactive object". Fix: `markRaw(NodeComponent)` in [src/nodes/index.ts](src/nodes/index.ts).
+- **`shallowRef<FlowNodeShape[]>` reicht für Vue Flow-State.** Tieferes `ref` führt zurück zum TS2589-Problem aus Phase 1. Daten bleiben in Y.Map; Refs sind nur die UI-Spiegelung.
+- **`observeDeep` auf Y.Map weckt Edge-abhängige Computed nicht automatisch.** Wenn Edges aus Node-Daten ableiten (Match-Status), muss die Computed-Lesung beider Refs explizit am Anfang stehen, sonst trackt Vue die Dependency nicht zuverlässig.
+- **Voll-Snapshot statt inkrementell für V1.** Bewusste Vereinfachung — Code in [src/lib/yjs/storage.ts](src/lib/yjs/storage.ts) ist trivial. Refactor zu inkrementell ist eine Funktion, nicht eine Architektur-Änderung.
+- **`beforeunload`-Flush ist Best-Effort.** Browser killen Tabs ohne Warning. y-indexeddb hält die Daten lokal weiter, sodass beim Reload aus dem lokalen Cache geladen wird, falls der finale Storage-Upload nicht durchkam.
+- **Type-Compare ist bewusst dumm.** `User | null` ≠ `User`, `Item[]` ≠ `Array<Item>`. V2: ggf. Smart-Compare oder Mini-TS-Parser in [src/lib/types/compare.ts](src/lib/types/compare.ts).
+- **`mockItems` in ComponentSchema ist aktuell tot.** Wird angezeigt, aber nirgends ausgewertet. Behalten als Annotation für späteres Code-Gen, oder bei Refactor entfernen.
+
 ## Erkenntnisse aus dem Setup (Phase 0+1)
 
 - **Supabase-Key-Format hat sich 2025 geändert.** Der neue Publishable Key heißt `sb_publishable_…` (~46 Zeichen, kein JWT) statt des alten `eyJ…`-JWT. Beide funktionieren mit `@supabase/supabase-js` v2 — Frontend-Code muss nichts unterscheiden. Im Dashboard heißt es weiterhin "anon / public", aber neue Projekte zeigen das `sb_…`-Format.
@@ -112,8 +123,8 @@ supabase/
 
 0. ✅ **Setup** — Vite/Vue/TS, Tailwind, shadcn-vue, Pinia, Router, Supabase-Projekt, Vercel, ESLint/Prettier/Husky, Vitest, GH Actions mit `oven-sh/setup-bun@v2`.
 1. ✅ **Boards & Editor-Skeleton** — Migration, Routes `/` und `/board/:id`, Canvas + 4 Node Types, Sidebar-Palette mit Drag & Drop.
-2. ⏳ **Y.js Single-User** — Y.Doc + IndexedDB, Snapshots in Storage (30s/2min), Properties-Panel mit zod, Undo/Redo, `beforeunload`.
-3. **Realtime-Kollaboration (Kernstück, 3–5d)** — Custom Y.js-Provider auf Supabase Broadcast, Awareness (Cursor/Selektion/User-Liste), Reconnect, Edge Function für Compaction.
+2. ✅ **Y.js Single-User** — Y.Doc + IndexedDB, Voll-Snapshots in Storage (30s/2min), Properties-Panel mit zod, Undo/Redo, `beforeunload`. Bonus: typisierte Felder + Match-Engine (✓/⚠/✗/💤, Edge-Coloring).
+3. ⏳ **Realtime-Kollaboration (Kernstück, 3–5d)** — Custom Y.js-Provider auf Supabase Broadcast, Awareness (Cursor/Selektion/User-Liste), Reconnect, Edge Function für Compaction.
 4. **Polish** — Settings-Popover, Keyboard Shortcuts, Dark Mode, Export (JSON/PNG/Mermaid), Read-Only via `?readonly=1`.
 5. **Deploy & Härtung** — Production-Keys, RLS-Audit, Sentry, Anti-Pause-Cron, Rate-Limits, Quoten-Drosselung bei >80%.
 

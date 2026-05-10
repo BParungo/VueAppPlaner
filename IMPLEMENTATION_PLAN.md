@@ -9,12 +9,12 @@
 
 - ✅ **Phase 0** — Setup (Vite/Vue/TS, Tailwind, shadcn-vue, Pinia, Router, Supabase, ESLint/Prettier, Vitest, GH Actions)
 - ✅ **Phase 1** — Boards & Editor-Skeleton (Migrations, Landing, BoardView, 4 Node Types, Sidebar mit Drag&Drop)
-- ⏳ **Phase 2** — Y.js Single-User (nächster Schritt)
-- ⏸️ Phase 3 — Realtime-Kollaboration
+- ✅ **Phase 2** — Y.js Single-User + typisierte Felder + Match-Engine
+- ⏳ **Phase 3** — Realtime-Kollaboration (nächster Schritt)
 - ⏸️ Phase 4 — Polish
 - ⏸️ Phase 5 — Deployment & Härtung
 
-**Live im Browser getestet:** Board-Erstellung, Recent-Boards, Node-Drop, Edge-Verbindungen — alles funktioniert. Persistenz fehlt noch (Reload löscht Canvas — erwartbar, kommt mit Y.js in Phase 2).
+**Live im Browser getestet:** Reload-Persistenz, Save-Indikator, Properties-Panel mit zod-Validierung, Undo/Redo, typisierte Felder mit Match-Status (✓/⚠/✗/💤), Edge-Coloring bei Mismatch. Y.js-Backend stabil im Single-User-Betrieb.
 
 Operative Hinweise und Setup-Erkenntnisse: siehe [CLAUDE.md](CLAUDE.md).
 
@@ -230,14 +230,30 @@ Alle als shadcn-vue Cards mit konsistentem Look:
 - Nodes/Edges leben aktuell nur lokal in `shallowRef` — Reload löscht Canvas. Persistenz ist Phase 2.
 - Property-Panel (rechts) ist bewusst noch nicht da — kommt mit Phase 2 zusammen mit Y.js, damit Edits direkt persistieren.
 
-### Phase 2 — Y.js Persistenz Single-User (2 Tage)
+### Phase 2 — Y.js Persistenz Single-User ✅
 
-- Y.Doc pro Board, gecached in IndexedDB
-- `useLocalUser()` Composable (clientId, displayName, color)
-- Inkrementelle Snapshots in Supabase Storage, debounced 30s + max 2min Cap
-- Properties-Panel mit zod-Validierung
-- Undo/Redo via Y.js UndoManager
-- `beforeunload`-Hook für finalen Snapshot
+- ✅ Y.Doc pro Board mit `Y.Map<nodes>` und `Y.Map<edges>` ([src/lib/yjs/doc.ts](src/lib/yjs/doc.ts))
+- ✅ IndexedDB-Cache via `y-indexeddb` ([src/lib/yjs/indexeddb.ts](src/lib/yjs/indexeddb.ts))
+- ✅ Voll-Snapshots in Supabase Storage mit 30s-Debounce + 2min Hard-Cap ([src/lib/yjs/snapshot-loop.ts](src/lib/yjs/snapshot-loop.ts), [storage.ts](src/lib/yjs/storage.ts)) — inkrementell bewusst zurückgestellt
+- ✅ Vue Flow ↔ Y.Map Sync-Adapter ([src/lib/yjs/flow-sync.ts](src/lib/yjs/flow-sync.ts))
+- ✅ Properties-Panel mit zod-Validierung pro Node-Typ ([src/components/PropertiesPanel.vue](src/components/PropertiesPanel.vue))
+- ✅ Y.UndoManager + Ctrl/Cmd+Z / Ctrl/Cmd+Shift+Z
+- ✅ `beforeunload`-Hook für finalen Snapshot
+- ✅ Save-Status-Indikator im Header (idle/pending/saving/error)
+
+**Bonus aus Phase 2 (nicht im ursprünglichen Plan):**
+
+- ✅ Felder werden typisiert gespeichert (`{ name, type }`) statt CSV-Strings — DataSource `fields`, Component `props` + `emits`, Store `state` + `actions`
+- ✅ `TypedFieldList`-Komponente für inline add/remove/reorder
+- ✅ Read-only "consumes:"-Sektion in Component/Store-Cards aus Edges abgeleitet
+- ✅ Match-Engine ([src/lib/types/match.ts](src/lib/types/match.ts)): pro Feld ✓ / ⚠ / ✗, Source-Felder mit 💤 wenn unused, Edges amber bei partiellem Mismatch / rot bei Total-Mismatch
+
+**Erkenntnisse**
+
+- Vue Flow's `:edges`/`:nodes`-Props sind nur Initial-Werte. Style-Updates erfordern `useVueFlow().setEdges()` + Deep-Watcher. Klassischer Stolperstein.
+- `markRaw()` auf Node-Type-Registry nötig, sobald State durch Reactivity-Wrapping läuft (verhindert Vue's Component-Reactivity-Warning).
+- Type-Compare absichtlich dumm (Normalized-String). Smart-Compare oder TS-Parser wären eine Datei-lokale Erweiterung in [src/lib/types/compare.ts](src/lib/types/compare.ts).
+- `mockItems` aus dem ursprünglichen Plan ist aktuell tot — Anzeige ohne Wirkung. Bleibt als Annotation für mögliches V2-Code-Gen.
 
 ### Phase 3 — Realtime-Kollaboration (3–5 Tage, Kernstück)
 
