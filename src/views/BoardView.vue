@@ -17,6 +17,7 @@ import NodePalette from '@/components/NodePalette.vue';
 import PropertiesPanel from '@/components/PropertiesPanel.vue';
 import LiveCursors from '@/components/LiveCursors.vue';
 import ActiveUsers from '@/components/ActiveUsers.vue';
+import BoardTitle from '@/components/BoardTitle.vue';
 import { nodeTypes } from '@/nodes';
 import { NODE_DEFAULTS, type NodeKind } from '@/schemas/nodes';
 import { getBoard, type Board } from '@/lib/supabase/boards';
@@ -24,6 +25,7 @@ import { useRecentBoards } from '@/composables/useRecentBoards';
 import { useLocalUser } from '@/composables/useLocalUser';
 import { useYBoard } from '@/composables/useYBoard';
 import { useAwareness } from '@/composables/useAwareness';
+import { useBoardName } from '@/composables/useBoardName';
 import { provideBoardContext } from '@/composables/boardContext';
 import {
   addNode,
@@ -36,7 +38,7 @@ import { buildEdgeReport } from '@/lib/types/match';
 const props = defineProps<{ id: string }>();
 const router = useRouter();
 
-const { track } = useRecentBoards();
+const { track, updateName: updateRecentName } = useRecentBoards();
 const { user } = useLocalUser();
 
 const board = ref<Board | null>(null);
@@ -60,6 +62,18 @@ const {
 provideBoardContext({ nodes, edges });
 
 const { peers, setCursor, setSelection } = useAwareness(awareness);
+
+const postgresName = computed(() => board.value?.name ?? null);
+const { name: boardName, set: setBoardName } = useBoardName(
+  props.id,
+  () => yboard.getBoard(),
+  yReady,
+  postgresName,
+);
+
+watch(boardName, (next) => {
+  if (next) updateRecentName(props.id, next);
+});
 
 function styleFor(reportTotalMismatch: boolean, partialMismatch: boolean) {
   if (reportTotalMismatch) {
@@ -335,9 +349,7 @@ watch(yError, (err) => {
           <Button variant="ghost" size="sm" @click="router.push('/')">
             ← Boards
           </Button>
-          <h1 class="text-base font-semibold truncate">
-            {{ board?.name ?? 'Board' }}
-          </h1>
+          <BoardTitle :name="boardName" @rename="setBoardName" />
           <span class="text-xs text-muted-foreground font-mono truncate">
             {{ id }}
           </span>

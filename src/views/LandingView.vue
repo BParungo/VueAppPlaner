@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import {
   Card,
@@ -9,16 +9,27 @@ import {
   CardContent,
 } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { createBoard } from '@/lib/supabase/boards';
+import { createBoard, getBoard } from '@/lib/supabase/boards';
 import { useRecentBoards } from '@/composables/useRecentBoards';
 import { useLocalUser } from '@/composables/useLocalUser';
 
 const router = useRouter();
-const { boards, remove } = useRecentBoards();
+const { boards, updateName, remove } = useRecentBoards();
 const { user } = useLocalUser();
 
 const creating = ref(false);
 const error = ref<string | null>(null);
+
+onMounted(() => {
+  for (const b of boards.value) {
+    getBoard(b.id)
+      .then((data) => {
+        if (data && data.name) updateName(b.id, data.name);
+        else if (data === null) remove(b.id);
+      })
+      .catch(() => undefined);
+  }
+});
 
 async function onCreate() {
   creating.value = true;

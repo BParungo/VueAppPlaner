@@ -18,9 +18,18 @@ export function useRecentBoards() {
     boards.value = next.slice(0, MAX_RECENT);
   }
 
+  function updateName(id: string, name: string) {
+    const idx = boards.value.findIndex((b) => b.id === id);
+    if (idx === -1) return;
+    if (boards.value[idx]!.name === name) return;
+    const next = boards.value.slice();
+    next[idx] = { ...next[idx]!, name };
+    boards.value = next;
+  }
+
   function remove(id: string) {
     boards.value = boards.value.filter((b) => b.id !== id);
   }
 
-  return { boards, track, remove };
+  return { boards, track, updateName, remove };
 }
