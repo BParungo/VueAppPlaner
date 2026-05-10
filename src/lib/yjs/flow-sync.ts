@@ -5,7 +5,7 @@ import type {
 } from '@vue-flow/core';
 import type { BoardDoc, FlowEdgeShape, FlowNodeShape } from './doc';
 
-const ORIGIN_LOCAL = 'local';
+export const ORIGIN_LOCAL = 'local';
 export const ORIGIN_REMOTE = 'remote';
 export const ORIGIN_INIT = 'init';
 

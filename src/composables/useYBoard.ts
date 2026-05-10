@@ -16,6 +16,7 @@ import {
 } from '@/lib/yjs/snapshot-loop';
 import {
   ORIGIN_INIT,
+  ORIGIN_LOCAL,
   bindFlowToYDoc,
 } from '@/lib/yjs/flow-sync';
 
@@ -66,6 +67,7 @@ export function useYBoard(boardId: string) {
 
       undoManager = new Y.UndoManager([board.yNodes, board.yEdges], {
         captureTimeout: 500,
+        trackedOrigins: new Set([ORIGIN_LOCAL]),
       });
 
       snapshotLoop = startSnapshotLoop(boardId, board.doc, (s) => {

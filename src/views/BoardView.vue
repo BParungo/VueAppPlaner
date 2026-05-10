@@ -102,10 +102,21 @@ const {
   setNodes,
 } = useVueFlow();
 
+// Guard verhindert Echo: setNodes/setEdges -> onChange -> Y.Doc -> Observer -> setNodes...
+let suppressFlowChanges = 0;
+function withSuppressed<T>(fn: () => T): T {
+  suppressFlowChanges++;
+  try {
+    return fn();
+  } finally {
+    suppressFlowChanges--;
+  }
+}
+
 watch(
   coloredEdges,
   (next) => {
-    setEdges(next);
+    withSuppressed(() => setEdges(next));
   },
   { deep: true, flush: 'post' },
 );
@@ -113,7 +124,7 @@ watch(
 watch(
   nodes,
   (next) => {
-    setNodes(next);
+    withSuppressed(() => setNodes(next));
   },
   { deep: true, flush: 'post' },
 );
@@ -121,17 +132,20 @@ watch(
 onNodesChange((changes: NodeChange[]) => {
   const yb = getYBoard();
   if (!yb) return;
-  // 'select'-Changes nicht in Y.Map schreiben — sind UI-only.
+  // 'select'-Changes immer ausserhalb des Suppression-Guards verarbeiten —
+  // sind UI-only und schreiben nicht in Y.Map.
   for (const change of changes) {
     if (change.type === 'select') {
       if (change.selected) selectedNodeId.value = change.id;
       else if (selectedNodeId.value === change.id) selectedNodeId.value = null;
     }
   }
+  if (suppressFlowChanges > 0) return;
   applyNodeChangesToYDoc(yb, changes);
 });
 
 onEdgesChange((changes: EdgeChange[]) => {
+  if (suppressFlowChanges > 0) return;
   const yb = getYBoard();
   if (!yb) return;
   applyEdgeChangesToYDoc(yb, changes);
