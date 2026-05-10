@@ -134,6 +134,18 @@ function withSuppressed<T>(fn: () => T): T {
   }
 }
 
+// WICHTIG: Nodes-Watcher MUSS vor Edges-Watcher registriert werden.
+// Vue feuert post-flush Watcher in Registrierungs-Reihenfolge — Edges
+// duerfen erst gesetzt werden, wenn Vue Flow die referenzierten Nodes
+// bereits kennt, sonst kommt "Edge source or target is missing".
+watch(
+  nodes,
+  (next) => {
+    withSuppressed(() => setNodes(next));
+  },
+  { deep: true, flush: 'post' },
+);
+
 watch(
   coloredEdges,
   (next) => {
@@ -142,13 +154,16 @@ watch(
   { deep: true, flush: 'post' },
 );
 
-watch(
-  nodes,
-  (next) => {
-    withSuppressed(() => setNodes(next));
-  },
-  { deep: true, flush: 'post' },
-);
+// Initial-Sync: yReady wechselt von false -> true, sobald Y.Doc geladen ist.
+// Da wir keine :nodes/:edges-Props mehr setzen, muessen wir den Vue-Flow-Store
+// einmalig befuellen. Nodes vor Edges, sonst Edge-missing-Warning.
+watch(yReady, (ready) => {
+  if (!ready) return;
+  withSuppressed(() => {
+    setNodes(nodes.value);
+    setEdges(coloredEdges.value);
+  });
+});
 
 onNodesChange((changes: NodeChange[]) => {
   const yb = getYBoard();
@@ -426,8 +441,6 @@ watch(yError, (err) => {
         @mouseleave="onCanvasMouseLeave"
       >
         <VueFlow
-          :nodes="nodes"
-          :edges="coloredEdges"
           :node-types="nodeTypes"
           :default-edge-options="{ animated: false }"
           fit-view-on-init

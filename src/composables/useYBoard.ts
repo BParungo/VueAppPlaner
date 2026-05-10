@@ -108,7 +108,12 @@ export function useYBoard(boardId: string) {
   });
 
   onBeforeUnmount(() => {
-    snapshotLoop?.flush().catch(() => undefined);
+    // Snapshot-Flush starten und LAUFEN LASSEN, bevor wir die Y.Doc killen.
+    // Wir warten nicht (Navigation soll nicht blockieren), aber wir muessen
+    // den Upload aus einem Bytes-Buffer machen, der NICHT mehr von der Doc
+    // abhaengt. Daher: snapshotLoop.flush() encodet zuerst (synchron), dann
+    // laeuft der Storage-Upload im Hintergrund. Y.Doc darf erst danach weg.
+    const pending = snapshotLoop?.flush().catch(() => undefined);
     snapshotLoop?.stop();
     unsubBeforeUnload?.();
     scope.stop();
@@ -116,8 +121,17 @@ export function useYBoard(boardId: string) {
     provider = null;
     unbindFlow?.();
     undoManager?.destroy();
-    if (board) destroyBoardDoc(board);
-    board = null;
+    // Y.Doc-Teardown verzoegern, bis Flush das Encoding abgeschlossen hat.
+    // pending ist undefined, wenn nichts dirty war.
+    if (pending) {
+      pending.finally(() => {
+        if (board) destroyBoardDoc(board);
+        board = null;
+      });
+    } else {
+      if (board) destroyBoardDoc(board);
+      board = null;
+    }
   });
 
   return {

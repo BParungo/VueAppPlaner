@@ -60,29 +60,37 @@ export function createSupabaseProvider(
   let channel: RealtimeChannel | null = null;
   let destroyed = false;
 
-  // Outgoing Doc-Updates: Microtask-Batch
+  // Outgoing Doc-Updates: Trailing-Coalesce 100ms.
+  // Vue Flow feuert beim Draggen 30-60 Updates/s. Ohne Throttle wuerden wir
+  // pro Frame broadcasten und das Free-Tier-Message-Budget zerlegen.
+  const DOC_THROTTLE_MS = 100;
   const pendingUpdates: Uint8Array[] = [];
-  let flushScheduled = false;
+  let throttleTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastFlushAt = 0;
+
+  function flushPendingUpdates() {
+    throttleTimer = null;
+    if (pendingUpdates.length === 0) return;
+    const merged = Y.mergeUpdates(pendingUpdates.splice(0));
+    lastFlushAt = Date.now();
+    if (!channel || status.value !== 'connected') return;
+    channel
+      .send({
+        type: 'broadcast',
+        event: EV_UPDATE,
+        payload: {
+          sender: senderId,
+          payload: bytesToBase64(merged),
+        } satisfies UpdateMsg,
+      })
+      .catch((e) => console.warn('[provider] broadcast update failed', e));
+  }
 
   function scheduleFlush() {
-    if (flushScheduled) return;
-    flushScheduled = true;
-    queueMicrotask(() => {
-      flushScheduled = false;
-      if (pendingUpdates.length === 0) return;
-      const merged = Y.mergeUpdates(pendingUpdates.splice(0));
-      if (!channel || status.value !== 'connected') return;
-      channel
-        .send({
-          type: 'broadcast',
-          event: EV_UPDATE,
-          payload: {
-            sender: senderId,
-            payload: bytesToBase64(merged),
-          } satisfies UpdateMsg,
-        })
-        .catch((e) => console.warn('[provider] broadcast update failed', e));
-    });
+    if (throttleTimer !== null) return;
+    const elapsed = Date.now() - lastFlushAt;
+    const delay = Math.max(0, DOC_THROTTLE_MS - elapsed);
+    throttleTimer = setTimeout(flushPendingUpdates, delay);
   }
 
   const onDocUpdate = (update: Uint8Array, origin: unknown) => {
@@ -92,18 +100,18 @@ export function createSupabaseProvider(
   };
   board.doc.on('update', onDocUpdate);
 
-  // Outgoing Awareness-Updates
-  const onAwarenessUpdate = (
-    {
-      added,
-      updated,
-      removed,
-    }: { added: number[]; updated: number[]; removed: number[] },
-    origin: unknown,
-  ) => {
-    if (origin === 'remote-awareness') return;
-    const changed = added.concat(updated, removed);
-    if (changed.length === 0) return;
+  // Outgoing Awareness-Updates: Microtask-Coalesce.
+  // Mehrere setLocalStateField-Calls im selben Tick (Cursor + Selection)
+  // werden zu einem Broadcast gemerged. Kein zeitliches Throttle hier,
+  // weil setCursor in useAwareness bereits gedrosselt wird.
+  const pendingAwarenessChanged = new Set<number>();
+  let awarenessFlushScheduled = false;
+
+  function flushAwareness() {
+    awarenessFlushScheduled = false;
+    if (pendingAwarenessChanged.size === 0) return;
+    const changed = Array.from(pendingAwarenessChanged);
+    pendingAwarenessChanged.clear();
     if (!channel || status.value !== 'connected') return;
     const payload = encodeAwarenessUpdate(awareness, changed);
     channel
@@ -116,6 +124,24 @@ export function createSupabaseProvider(
         } satisfies AwarenessMsg,
       })
       .catch((e) => console.warn('[provider] broadcast awareness failed', e));
+  }
+
+  const onAwarenessUpdate = (
+    {
+      added,
+      updated,
+      removed,
+    }: { added: number[]; updated: number[]; removed: number[] },
+    origin: unknown,
+  ) => {
+    if (origin === 'remote-awareness') return;
+    for (const id of added) pendingAwarenessChanged.add(id);
+    for (const id of updated) pendingAwarenessChanged.add(id);
+    for (const id of removed) pendingAwarenessChanged.add(id);
+    if (pendingAwarenessChanged.size === 0) return;
+    if (awarenessFlushScheduled) return;
+    awarenessFlushScheduled = true;
+    queueMicrotask(flushAwareness);
   };
   awareness.on('update', onAwarenessUpdate);
 
@@ -151,11 +177,41 @@ export function createSupabaseProvider(
 
   function handleSyncRes(msg: SyncResMsg) {
     if (msg.to !== senderId) return;
+    syncResReceived = true;
+    clearSyncRetry();
     const update = base64ToBytes(msg.payload);
     Y.applyUpdate(board.doc, update, ORIGIN_REMOTE);
   }
 
-  function broadcastSyncRequest() {
+  // Sync-Request: 0-500ms Jitter (Thundering-Herd-Schutz) +
+  // Retry-Loop falls niemand antwortet. Letzteres ist wichtig, wenn ein
+  // Peer joint waehrend der einzige andere Peer gerade reconnected oder
+  // den Channel-Subscribe noch nicht abgeschlossen hat — sonst sehen wir
+  // bis zum naechsten lokalen Edit nur unseren IndexedDB-Stand.
+  const SYNC_RETRY_DELAY_MS = 2000;
+  const SYNC_MAX_ATTEMPTS = 3;
+  let syncReqTimer: ReturnType<typeof setTimeout> | null = null;
+  let syncRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  let syncAttempt = 0;
+  let syncResReceived = false;
+
+  function clearSyncReq() {
+    if (syncReqTimer !== null) {
+      clearTimeout(syncReqTimer);
+      syncReqTimer = null;
+    }
+    clearSyncRetry();
+  }
+
+  function clearSyncRetry() {
+    if (syncRetryTimer !== null) {
+      clearTimeout(syncRetryTimer);
+      syncRetryTimer = null;
+    }
+  }
+
+  function sendSyncRequestNow() {
+    syncReqTimer = null;
     if (!channel || status.value !== 'connected') return;
     const sv = Y.encodeStateVector(board.doc);
     channel
@@ -168,6 +224,25 @@ export function createSupabaseProvider(
         } satisfies SyncReqMsg,
       })
       .catch((e) => console.warn('[provider] broadcast sync-req failed', e));
+
+    // Retry, falls keine SYNC_RES innerhalb von SYNC_RETRY_DELAY_MS kommt.
+    clearSyncRetry();
+    if (syncAttempt < SYNC_MAX_ATTEMPTS) {
+      syncRetryTimer = setTimeout(() => {
+        syncRetryTimer = null;
+        if (syncResReceived || destroyed) return;
+        syncAttempt++;
+        sendSyncRequestNow();
+      }, SYNC_RETRY_DELAY_MS);
+    }
+  }
+
+  function broadcastSyncRequest() {
+    clearSyncReq();
+    syncAttempt = 1;
+    syncResReceived = false;
+    const jitter = Math.floor(Math.random() * 500);
+    syncReqTimer = setTimeout(sendSyncRequestNow, jitter);
   }
 
   // Reconnect-Backoff
@@ -229,6 +304,25 @@ export function createSupabaseProvider(
         status.value = 'connected';
         reconnectAttempt = 0;
         broadcastSyncRequest();
+        // Full-State-Push: unser SYNC_REQ holt nur Diffs FROM Peers,
+        // pusht aber unsere eigenen Updates nicht aktiv. Beim Reload-Mount
+        // hat der Peer evtl. Edits, die andere Peers nie gesehen haben
+        // (weil Channel beim Editieren down war oder Peer-B noch nicht
+        // joint hatte). Daher pushen wir einmalig den vollen Doc-State.
+        // Y.js mergt idempotent. Skip wenn Doc leer.
+        const fullState = Y.encodeStateAsUpdate(board.doc);
+        if (fullState.byteLength > 2) {
+          ch.send({
+            type: 'broadcast',
+            event: EV_UPDATE,
+            payload: {
+              sender: senderId,
+              payload: bytesToBase64(fullState),
+            } satisfies UpdateMsg,
+          }).catch((e) =>
+            console.warn('[provider] full-state push failed', e),
+          );
+        }
         // Awareness-State neu broadcasten, damit Peers uns sehen
         const local = awareness.getLocalState();
         if (local) {
@@ -248,6 +342,7 @@ export function createSupabaseProvider(
 
   function disconnect() {
     clearReconnect();
+    clearSyncReq();
     if (channel) {
       void supabase.removeChannel(channel).catch(() => undefined);
       channel = null;
@@ -259,6 +354,14 @@ export function createSupabaseProvider(
     if (destroyed) return;
     destroyed = true;
     clearReconnect();
+    clearSyncReq();
+    if (throttleTimer !== null) {
+      clearTimeout(throttleTimer);
+      throttleTimer = null;
+    }
+    pendingUpdates.length = 0;
+    pendingAwarenessChanged.clear();
+    awarenessFlushScheduled = false;
     board.doc.off('update', onDocUpdate);
     awareness.off('update', onAwarenessUpdate);
     removeAwarenessStates(
