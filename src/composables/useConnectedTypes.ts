@@ -7,7 +7,7 @@ import {
 
 export interface ConnectedSource {
   sourceId: string;
-  sourceType: 'dataSource' | 'store' | 'component' | 'route';
+  sourceType: 'dataSource' | 'store' | 'component' | 'route' | 'composable' | 'note';
   sourceLabel: string;
   fields: TypedField[];
 }
@@ -21,6 +21,8 @@ function fieldsFromNode(node: FlowNodeShape): TypedField[] {
       return asTypedFields(data.state);
     case 'component':
       return asTypedFields(data.props);
+    case 'composable':
+      return asTypedFields(data.returns);
     default:
       return [];
   }
@@ -31,6 +33,7 @@ function labelFromNode(node: FlowNodeShape): string {
   if (typeof data.label === 'string' && data.label.trim()) return data.label;
   if (typeof data.componentName === 'string') return data.componentName;
   if (typeof data.storeName === 'string') return data.storeName;
+  if (typeof data.composableName === 'string') return data.composableName;
   if (typeof data.path === 'string') return data.path;
   return node.id.slice(0, 6);
 }

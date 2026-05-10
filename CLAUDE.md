@@ -4,9 +4,9 @@ Visuelles Planungs-Tool für Vue-Apps. Multi-User, kein Login in V1. Volle Spec:
 
 ## Aktueller Stand (2026-05-10)
 
-**Phase 0 + 1 + 2 abgeschlossen.** Browser-getestet: Reload-Persistenz, Properties-Panel mit zod-Forms, Undo/Redo via Y.UndoManager, Save-Status-Indikator im Header. Zusätzlich: Felder sind jetzt typisiert (`{ name, type }`), Match-Engine markiert props mit ✓/⚠/✗, Edges werden bei Total-Mismatch rot, ungenutzte Source-Felder mit 💤. Alles in einem Commit (`beb9694`).
+**Phase 0 + 1 + 2 abgeschlossen, Phase 3 weitgehend durch.** Custom Y.js-Provider auf Supabase Broadcast steht, Awareness mit Live-Cursor und User-Liste läuft, Reconnect mit Backoff implementiert. Sync-Härtung nachgezogen: Doc-Update-Throttling (100ms Trailing-Coalesce) + Cursor-Awareness 50ms gegen Free-Tier-Limit, Awareness `setLocalStateField` + Microtask-Coalesce, Sync-Req mit Jitter+Retry, Full-State-Push beim Connect (löst Reload-Sync-Bug), Y.Doc-Teardown nach Flush (kein Use-after-destroy beim Verlassen). Browser-getestet mit Reload und Boards-Auswahl-Wechsel.
 
-**Nächster Schritt:** Phase 3 — Realtime-Kollaboration (Custom Y.js-Provider auf Supabase Broadcast, Awareness, Live-Cursor).
+**Nächster Schritt:** Edge Function für periodische Compaction (oder erst Phase 4 Polish, je nach Priorität).
 
 ## Stack
 
@@ -110,6 +110,16 @@ supabase/
 - **`beforeunload`-Flush ist Best-Effort.** Browser killen Tabs ohne Warning. y-indexeddb hält die Daten lokal weiter, sodass beim Reload aus dem lokalen Cache geladen wird, falls der finale Storage-Upload nicht durchkam.
 - **Type-Compare ist bewusst dumm.** `User | null` ≠ `User`, `Item[]` ≠ `Array<Item>`. V2: ggf. Smart-Compare oder Mini-TS-Parser in [src/lib/types/compare.ts](src/lib/types/compare.ts).
 - **`mockItems` in ComponentSchema ist aktuell tot.** Wird angezeigt, aber nirgends ausgewertet. Behalten als Annotation für späteres Code-Gen, oder bei Refactor entfernen.
+
+## Erkenntnisse aus Phase 3
+
+- **Free-Tier Realtime zählt pro EMPFÄNGER, nicht pro Send.** 1 Broadcast an 4 Peers = 5 Messages (1 send + 4 receive). Limit Free: 2M/Monat, 200 Concurrent Connections. Vue Flow feuert beim Draggen 30–60 Updates/s — ohne Throttling ist das Free-Tier nach Stunden weg. Drosselung in zwei Schichten: Doc-Updates Trailing-Coalesce 100ms in [src/lib/yjs/supabase-provider.ts](src/lib/yjs/supabase-provider.ts), Cursor-Awareness 50ms in [src/composables/useAwareness.ts](src/composables/useAwareness.ts). Selection bleibt sofortig — selten und semantisch wichtig.
+- **`setLocalStateField('cursor', x)` statt `setLocalState({ ...local, cursor: x })`.** Field-API encodet nur das geänderte Feld, ~⅔ kleinere Awareness-Payloads. Außerdem im Provider Microtask-Coalesce für Awareness: mehrere Field-Sets im selben Tick (Cursor + Selection) → ein Broadcast.
+- **Sync-Protocol war asymmetrisch — Reload-Sync ging schief.** Der Joiner schickt SYNC_REQ und bekommt Diff, pusht aber seinen eigenen State nie aktiv. Wenn Peer-A Edits gemacht hat, die Peer-B (z.B. weil Channel kurz down) nie gesehen hat, und A reloaded, sieht A nach IndexedDB+Storage+SyncReq seine eigenen Edits, B aber weiterhin nicht. Fix: nach SUBSCRIBED einmalig `Y.encodeStateAsUpdate(doc)` als EV_UPDATE-Broadcast pushen — Y.js mergt idempotent. Skip bei leerem Doc (`byteLength > 2`). Kostet Doc-Größe als einmaliger Bandwidth pro Connect.
+- **SYNC_REQ braucht Retry, nicht nur Jitter.** Jitter (0–500ms) verhindert Thundering-Herd bei gleichzeitigem Reconnect. Retry (max 3× alle 2s) deckt das Race ab, wenn der einzige andere Peer beim Joinen gerade selbst reconnected — sonst bleibt der Joiner bis zum nächsten lokalen Edit auf dem IndexedDB-Stand.
+- **Y.Doc-Teardown nach Flush, nicht parallel.** `snapshotLoop.flush()` ist async und macht intern `Y.encodeStateAsUpdate(doc)` + Storage-Upload. Wer direkt danach `destroyBoardDoc(board)` ruft, encodet auf einem zerstörten Doc. Lösung: Promise behalten, Doc erst in `pending.finally(...)` killen — siehe [src/composables/useYBoard.ts](src/composables/useYBoard.ts). Navigation blockiert nicht, aber Upload schließt sauber.
+- **`:nodes`/`:edges`-Props zusätzlich zu `setNodes`/`setEdges` ist eine stille Echo-Quelle.** Vue Flow reicht reaktive Props live durch und triggert `onNodesChange`/`onEdgesChange` parallel zum Watcher. Kann doppelte Y.Doc-Schreibungen und wiederholte Dimension-Recalc-Warnings erzeugen. Lösung: Props weglassen, Initial-Sync via `watch(yReady, ...)` in [src/views/BoardView.vue](src/views/BoardView.vue).
+- **Watcher-Reihenfolge: Nodes vor Edges.** Vue feuert post-flush Watcher in Registrierungsreihenfolge. Wird der Edges-Watcher zuerst registriert, kann er Edges in den Vue-Flow-Store schreiben, deren Source/Target-Nodes noch nicht da sind → "Edge source or target is missing"-Warning. Trivial, aber bei Remote-Updates (Phase 3) plötzlich relevant, weil Nodes und Edges in beliebiger Reihenfolge ankommen.
 
 ## Erkenntnisse aus dem Setup (Phase 0+1)
 

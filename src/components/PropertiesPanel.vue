@@ -11,9 +11,12 @@ import { Button } from '@/components/ui/button';
 import TypedFieldList from '@/components/TypedFieldList.vue';
 import {
   componentSchema,
+  composableSchema,
   dataSourceSchema,
+  noteSchema,
   routeSchema,
   storeSchema,
+  NOTE_COLORS,
   type NodeKind,
   type TypedField,
 } from '@/schemas/nodes';
@@ -62,6 +65,10 @@ function schemaFor(kind: NodeKind) {
       return routeSchema;
     case 'store':
       return storeSchema;
+    case 'composable':
+      return composableSchema;
+    case 'note':
+      return noteSchema;
   }
 }
 
@@ -233,6 +240,54 @@ function setFieldList(key: string, value: TypedField[]) {
               type-placeholder="(arg: T) => Promise<R>"
               @update:model-value="setFieldList('actions', $event)"
             />
+          </template>
+
+          <template v-if="selectedNode.type === 'composable'">
+            <div>
+              <label class="block mb-1 text-muted-foreground">
+                composableName
+              </label>
+              <input
+                v-model="(draft as any).composableName"
+                class="w-full border rounded px-2 py-1 bg-background font-mono"
+                @blur="commit"
+              />
+            </div>
+            <TypedFieldList
+              :model-value="(draft as any).params ?? []"
+              label="params"
+              type-placeholder="string"
+              @update:model-value="setFieldList('params', $event)"
+            />
+            <TypedFieldList
+              :model-value="(draft as any).returns ?? []"
+              label="returns"
+              type-placeholder="Ref<T>"
+              @update:model-value="setFieldList('returns', $event)"
+            />
+          </template>
+
+          <template v-if="selectedNode.type === 'note'">
+            <div>
+              <label class="block mb-1 text-muted-foreground">body</label>
+              <textarea
+                v-model="(draft as any).body"
+                class="w-full border rounded px-2 py-1 bg-background min-h-24 resize-y"
+                @blur="commit"
+              />
+            </div>
+            <div>
+              <label class="block mb-1 text-muted-foreground">color</label>
+              <select
+                v-model="(draft as any).color"
+                class="w-full border rounded px-2 py-1 bg-background"
+                @change="commit"
+              >
+                <option v-for="c in NOTE_COLORS" :key="c" :value="c">
+                  {{ c }}
+                </option>
+              </select>
+            </div>
           </template>
 
           <p v-if="errorMsg" class="text-destructive text-xs mt-2">

@@ -46,6 +46,8 @@ function nodeFields(
         return asTypedFields(data.state);
       case 'component':
         return asTypedFields(data.emits);
+      case 'composable':
+        return asTypedFields(data.returns);
       default:
         return [];
     }
@@ -58,6 +60,8 @@ function nodeFields(
       // Ein Store kann von DataSources gespeist werden; sein "input"-Vertrag
       // ist sein eigener state.
       return asTypedFields(data.state);
+    case 'composable':
+      return asTypedFields(data.params);
     default:
       return [];
   }

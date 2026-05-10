@@ -34,18 +34,44 @@ export const storeSchema = z.object({
   actions: z.array(typedFieldSchema).default([]),
 });
 
+export const composableSchema = z.object({
+  label: z.string().default('Composable'),
+  composableName: z.string().default('useThing'),
+  params: z.array(typedFieldSchema).default([]),
+  returns: z.array(typedFieldSchema).default([]),
+});
+
+export const NOTE_COLORS = ['yellow', 'blue', 'green', 'red', 'gray'] as const;
+export type NoteColor = (typeof NOTE_COLORS)[number];
+
+export const noteSchema = z.object({
+  label: z.string().default('Note'),
+  body: z.string().default(''),
+  color: z.enum(NOTE_COLORS).default('yellow'),
+});
+
 export type DataSourceData = z.infer<typeof dataSourceSchema>;
 export type ComponentData = z.infer<typeof componentSchema>;
 export type RouteData = z.infer<typeof routeSchema>;
 export type StoreData = z.infer<typeof storeSchema>;
+export type ComposableData = z.infer<typeof composableSchema>;
+export type NoteData = z.infer<typeof noteSchema>;
 
-export type NodeKind = 'dataSource' | 'component' | 'route' | 'store';
+export type NodeKind =
+  | 'dataSource'
+  | 'component'
+  | 'route'
+  | 'store'
+  | 'composable'
+  | 'note';
 
 export const NODE_LABELS: Record<NodeKind, string> = {
   dataSource: 'Data Source',
   component: 'Component',
   route: 'Route',
   store: 'Store',
+  composable: 'Composable',
+  note: 'Note',
 };
 
 export const NODE_DEFAULTS: Record<NodeKind, () => unknown> = {
@@ -53,6 +79,8 @@ export const NODE_DEFAULTS: Record<NodeKind, () => unknown> = {
   component: () => componentSchema.parse({}),
   route: () => routeSchema.parse({}),
   store: () => storeSchema.parse({}),
+  composable: () => composableSchema.parse({}),
+  note: () => noteSchema.parse({}),
 };
 
 export function asTypedFields(value: unknown): TypedField[] {

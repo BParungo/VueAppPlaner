@@ -32,6 +32,16 @@ const items: {
     description: 'Pinia-Store',
     dot: 'bg-violet-500',
   },
+  {
+    kind: 'composable',
+    description: 'useThing() — params & returns',
+    dot: 'bg-teal-500',
+  },
+  {
+    kind: 'note',
+    description: 'Notiz / Platzhalter',
+    dot: 'bg-yellow-500',
+  },
 ];
 
 function onDragStart(event: DragEvent, kind: NodeKind) {
